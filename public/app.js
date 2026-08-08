@@ -1,0 +1,619 @@
+// Client: Verbindung, Warteraum, Kreis, Flaschendrehung, Karte.
+//
+// Der Endwinkel der Flasche kommt fertig vom Server. Der Client rechnet ihn
+// nicht nach – sonst könnten zwei Geräte auf verschiedene Leute zeigen, und
+// genau das wäre das Ende des Spiels.
+
+const $ = (id) => document.getElementById(id);
+
+// Sitzplatz-Tierchen. Gleiche Liste und gleiche Ableitung wie in den anderen
+// Spielen, damit dieselbe Person überall dasselbe Zeichen bekommt.
+const AVATARS = ["🦊", "🐙", "🦅", "🐺", "🦁", "🐉"];
+const avatarFor = (id) =>
+  AVATARS[[...String(id)].reduce((a, c) => a + c.charCodeAt(0), 0) % AVATARS.length];
+
+const MODUS_TEXT = {
+  nurdrehen: "Nur drehen",
+  harmlos: "Harmlos",
+  frech: "Frech",
+};
+
+const state = {
+  you: null,
+  code: null,
+  room: null,
+  runde: null,
+  pendingIntent: null,
+  visibility: "public",
+  modus: "harmlos",
+  // Der zuletzt gesetzte Winkel. Die Flasche darf nie zurückspringen, sonst
+  // dreht sie in der nächsten Runde rückwärts.
+  winkelStand: 0,
+  letzteRunde: null,
+};
+
+// ---------------------------------------------------------------------------
+// Verbindung
+// ---------------------------------------------------------------------------
+
+let sock = null;
+let retryIn = 500;
+
+function session() {
+  try {
+    return JSON.parse(sessionStorage.getItem("flasche") ?? "null");
+  } catch {
+    return null;
+  }
+}
+
+function saveSession(data) {
+  try {
+    sessionStorage.setItem("flasche", JSON.stringify(data));
+  } catch { /* Privatmodus – dann eben ohne Wiedereinstieg */ }
+}
+
+function send(msg) {
+  if (sock && sock.readyState === WebSocket.OPEN) sock.send(JSON.stringify(msg));
+}
+
+function connect() {
+  // Muss aus dem Basispfad kommen: das Spiel läuft in Produktion unter
+  // /flasche/, ein festes "/ws" landet auf der Domainwurzel.
+  const url = new URL("ws", document.baseURI);
+  url.protocol = location.protocol === "https:" ? "wss:" : "ws:";
+  sock = new WebSocket(url);
+
+  sock.onopen = () => {
+    retryIn = 500;
+    setStatus("");
+    const s = session();
+    if (state.pendingIntent) {
+      send(state.pendingIntent);
+      state.pendingIntent = null;
+    } else if (s && s.code && s.token) {
+      send({ t: "join", code: s.code, token: s.token, name: s.name });
+    } else {
+      send({ t: "browse" });
+    }
+  };
+
+  sock.onmessage = (ev) => {
+    let msg;
+    try {
+      msg = JSON.parse(ev.data);
+    } catch {
+      return;
+    }
+    onMessage(msg);
+  };
+
+  sock.onclose = () => {
+    setStatus("Verbindung weg – neuer Versuch …");
+    setTimeout(connect, retryIn);
+    retryIn = Math.min(retryIn * 1.8, 8000);
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Bildschirme
+// ---------------------------------------------------------------------------
+
+function show(name) {
+  for (const s of document.querySelectorAll(".screen")) {
+    s.classList.toggle("active", s.id === `screen-${name}`);
+  }
+  if (name === "home") send({ t: "browse" });
+}
+
+function setStatus(text) {
+  $("status").textContent = text;
+  $("status").classList.toggle("show", !!text);
+}
+
+function toast(text) {
+  const t = $("toast");
+  t.textContent = text;
+  t.classList.add("show");
+  clearTimeout(toast._id);
+  toast._id = setTimeout(() => t.classList.remove("show"), 2600);
+}
+
+function escapeHtml(s) {
+  return String(s).replace(
+    /[&<>"']/g,
+    (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c],
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Nachrichten vom Server
+// ---------------------------------------------------------------------------
+
+function onMessage(msg) {
+  switch (msg.t) {
+    case "rooms":
+      renderRooms(msg.rooms);
+      break;
+
+    case "joined":
+      state.you = msg.you;
+      state.code = msg.code;
+      saveSession({ code: msg.code, token: msg.token, name: $("name").value.trim() });
+      location.hash = msg.code;
+      break;
+
+    case "room":
+      state.room = msg;
+      if (msg.phase !== "playing") {
+        state.runde = null;
+        state.letzteRunde = null;
+      }
+      renderRoom();
+      break;
+
+    case "runde":
+      state.runde = msg;
+      renderRunde();
+      break;
+
+    case "final":
+      renderFinal(msg);
+      break;
+
+    case "error":
+      toast(msg.msg);
+      show("home");
+      break;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Offene Räume
+// ---------------------------------------------------------------------------
+
+function renderRooms(list) {
+  const box = $("roomList");
+  $("roomsCount").textContent = list.length ? `(${list.length})` : "";
+  if (!list.length) {
+    box.innerHTML = `<p class="rooms-empty">Gerade ist kein Raum offen.
+      Eröffne einen – er erscheint dann bei den anderen in der Liste.</p>`;
+    return;
+  }
+  box.innerHTML = list.map((r) => `
+    <button class="roomrow" data-code="${escapeHtml(r.code)}">
+      <span class="roomrow-name">${escapeHtml(r.host)}</span>
+      <span class="roomrow-meta">${escapeHtml(MODUS_TEXT[r.modus] ?? r.modus)}</span>
+      <span class="roomrow-count">${r.count}/${r.max}</span>
+    </button>`).join("");
+
+  for (const b of box.querySelectorAll(".roomrow")) {
+    b.addEventListener("click", () => joinCode(b.dataset.code));
+  }
+}
+
+// Gemeinsam mit den anderen Spielen: wer bei einem seinen Namen eintippt,
+// findet ihn beim nächsten schon vor.
+const NAME_KEY = "spiele_name";
+
+function meinName() {
+  return $("name").value.trim();
+}
+
+function joinCode(code) {
+  try {
+    localStorage.setItem(NAME_KEY, meinName());
+  } catch { /* egal */ }
+  state.pendingIntent = { t: "join", code, name: meinName() };
+  if (sock?.readyState === WebSocket.OPEN) {
+    send(state.pendingIntent);
+    state.pendingIntent = null;
+  }
+}
+
+function verlassen() {
+  send({ t: "leave" });
+  saveSession(null);
+  state.room = null;
+  state.runde = null;
+  state.you = null;
+  location.hash = "";
+  show("home");
+}
+
+// ---------------------------------------------------------------------------
+// Startseite
+// ---------------------------------------------------------------------------
+
+function setModus(m) {
+  state.modus = m;
+  for (const b of document.querySelectorAll("[data-modus]")) {
+    b.classList.toggle("sel", b.dataset.modus === m);
+  }
+  $("modusNote").textContent = m === "nurdrehen"
+    ? "Nur die Flasche. Was danach kommt, macht ihr euch selbst aus."
+    : m === "frech"
+    ? "Peinlich, aber jugendfrei: kein Alkohol, kein Körperkontakt."
+    : "Karten, die man am Familientisch vorlesen kann.";
+}
+
+for (const b of document.querySelectorAll("[data-modus]")) {
+  b.addEventListener("click", () => setModus(b.dataset.modus));
+}
+
+for (const b of document.querySelectorAll("[data-vis]")) {
+  b.addEventListener("click", () => {
+    state.visibility = b.dataset.vis;
+    for (const x of document.querySelectorAll("[data-vis]")) {
+      x.classList.toggle("sel", x === b);
+    }
+  });
+}
+
+$("createBtn").addEventListener("click", () => {
+  try {
+    localStorage.setItem(NAME_KEY, meinName());
+  } catch { /* egal */ }
+  state.pendingIntent = {
+    t: "create",
+    name: meinName(),
+    isPublic: state.visibility === "public",
+    modus: state.modus,
+  };
+  if (sock?.readyState === WebSocket.OPEN) {
+    send(state.pendingIntent);
+    state.pendingIntent = null;
+  }
+});
+
+$("joinBtn").addEventListener("click", () => {
+  const code = $("codeInput").value.toUpperCase().trim();
+  if (code.length < 3) return toast("Bitte den vierstelligen Code eingeben");
+  joinCode(code);
+});
+
+$("codeInput").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") $("joinBtn").click();
+});
+
+$("helpBtn").addEventListener("click", () => { $("help").hidden = false; });
+$("helpClose").addEventListener("click", () => { $("help").hidden = true; });
+
+// ---------------------------------------------------------------------------
+// Warteraum
+// ---------------------------------------------------------------------------
+
+function renderRoom() {
+  const r = state.room;
+  if (!r) return;
+
+  if (r.phase === "final") return; // das Endbild steht schon
+  if (r.phase === "playing") {
+    renderPunktleiste();
+    return;                        // den Spielbildschirm zeichnet renderRunde()
+  }
+
+  show("lobby");
+
+  $("roomCode").textContent = r.code;
+  const da = r.players.filter((p) => p.connected).length;
+  $("lobbyCount").textContent = `${da}/${r.maxPlayers}`;
+  $("roomVis").textContent =
+    (r.isPublic ? "Öffentlich – steht in der Liste" : "Privat – nur mit Code") +
+    " · " + MODUS_TEXT[r.settings.modus];
+
+  const list = $("playerList");
+  list.textContent = "";
+  const plaetze = Math.max(r.players.length + 1, 4);
+  for (let i = 0; i < Math.min(plaetze, r.maxPlayers); i++) {
+    const p = r.players[i];
+    const card = document.createElement("div");
+    card.className = "seat" + (p ? "" : " empty") +
+      (p?.ready ? " ready" : "") + (p && !p.connected ? " off" : "");
+    if (!p) {
+      card.innerHTML =
+        `<div class="av">🪑</div><div class="nm">frei</div><div class="st">wartet</div>`;
+    } else {
+      card.innerHTML = `
+        <div class="av">${avatarFor(p.id)}</div>
+        <div class="nm">${escapeHtml(p.name)}${p.id === state.you ? " (du)" : ""}</div>
+        <div class="st">${
+        !p.connected ? "weg" : p.host ? "startet" : p.ready ? "✓ bereit" : "wartet"
+      }</div>
+        ${p.host ? '<div class="host">HOST</div>' : ""}`;
+    }
+    list.append(card);
+  }
+
+  const isHost = r.hostId === state.you;
+  const me = r.players.find((p) => p.id === state.you);
+  $("hostControls").hidden = !isHost;
+  $("guestControls").hidden = isHost;
+
+  for (const b of document.querySelectorAll("[data-lobbymodus]")) {
+    b.classList.toggle("sel", b.dataset.lobbymodus === r.settings.modus);
+  }
+  for (const b of document.querySelectorAll("[data-rounds]")) {
+    b.classList.toggle("sel", Number(b.dataset.rounds) === r.settings.rounds);
+  }
+  for (const b of document.querySelectorAll("[data-lobbyvis]")) {
+    b.classList.toggle("sel", (b.dataset.lobbyvis === "public") === r.isPublic);
+  }
+
+  // Wer gerade weg ist, zählt nicht mit – sonst blockiert er den Start.
+  const here = r.players.filter((p) => p.connected);
+  const others = here.filter((p) => p.id !== r.hostId);
+  const allReady = others.every((p) => p.ready);
+  $("startBtn").disabled = here.length < r.minPlayers || !allReady;
+  $("startHint").textContent = here.length < r.minPlayers
+    ? "Zu dritt geht es los – zu zweit zeigt die Flasche jedes Mal auf denselben."
+    : allReady
+    ? "Alle bereit!"
+    : "Warten auf die anderen …";
+
+  $("readyBtn").textContent = me?.ready ? "Doch nicht bereit" : "Bereit!";
+  $("readyBtn").classList.toggle("on", !!me?.ready);
+}
+
+$("readyBtn").addEventListener("click", () => {
+  const me = state.room?.players.find((p) => p.id === state.you);
+  send({ t: "ready", value: !me?.ready });
+});
+
+$("startBtn").addEventListener("click", () => send({ t: "start" }));
+$("leaveBtn").addEventListener("click", verlassen);
+
+for (const b of document.querySelectorAll("[data-lobbymodus]")) {
+  b.addEventListener("click", () => send({ t: "settings", modus: b.dataset.lobbymodus }));
+}
+for (const b of document.querySelectorAll("[data-rounds]")) {
+  b.addEventListener("click", () => send({ t: "settings", rounds: Number(b.dataset.rounds) }));
+}
+for (const b of document.querySelectorAll("[data-lobbyvis]")) {
+  b.addEventListener("click", () =>
+    send({ t: "settings", isPublic: b.dataset.lobbyvis === "public" })
+  );
+}
+
+$("copyBtn").addEventListener("click", async () => {
+  const link = location.origin + location.pathname + "#" + (state.code ?? "");
+  try {
+    await navigator.clipboard.writeText(link);
+    toast("Link kopiert");
+  } catch {
+    // Ohne Zwischenablage (http, altes Handy) bleibt nur Vorlesen.
+    toast(link);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Spielbildschirm
+// ---------------------------------------------------------------------------
+
+function knopf(label, cls, fn) {
+  const b = document.createElement("button");
+  b.className = "btn " + cls;
+  b.textContent = label;
+  b.addEventListener("click", fn);
+  return b;
+}
+
+/** Die Namen auf dem Kreis verteilen. Position 0 liegt oben, dann im Uhrzeigersinn. */
+function zeichneKreis(r) {
+  const kreis = $("kreis");
+  for (const alt of kreis.querySelectorAll(".platz")) alt.remove();
+
+  const n = r.kreis.length;
+  r.kreis.forEach((p, i) => {
+    const el = document.createElement("div");
+    el.className = "platz" +
+      (p.id === state.you ? " ich" : "") +
+      (!p.da ? " weg" : "") +
+      (p.id === r.dreherId ? " dreher" : "") +
+      (p.id === r.zielId && r.schritt !== "dreht" ? " ziel" : "");
+    // Der Winkel muss zu dem passen, den der Server für die Flasche schickt.
+    // Kein Versatz: die Platzierung dreht den Vektor „nach oben", Platz 0
+    // liegt also schon oben – genau da, wohin die Flasche bei 0° zeigt.
+    // Ein zusätzliches -90 hier lässt die Flasche um eine Vierteldrehung
+    // daneben zeigen, und das fällt erst am Bild auf, nie an der Probe.
+    const grad = (i / n) * 360;
+    el.style.setProperty("--grad", `${grad}deg`);
+    el.innerHTML = `<span class="platz-av">${avatarFor(p.id)}</span>
+      <span class="platz-name">${escapeHtml(p.name)}</span>`;
+    kreis.append(el);
+  });
+}
+
+function renderRunde() {
+  const r = state.runde;
+  if (!r || state.room?.phase !== "playing") return;
+  show("game");
+
+  const isHost = state.room.hostId === state.you;
+  const binDreher = r.dreherId === state.you;
+  const binZiel = r.zielId === state.you;
+
+  $("rundeNo").textContent = String(r.n);
+  $("rundeTotal").textContent = r.total ? ` / ${r.total}` : "";
+  $("modusTag").textContent = MODUS_TEXT[r.modus] ?? "";
+  $("endeBtn").hidden = !isHost;
+
+  zeichneKreis(r);
+
+  // --- Die Flasche ---------------------------------------------------------
+  const flasche = $("flasche");
+  if (r.winkel == null) {
+    // Neue Runde: die Flasche bleibt liegen, wo sie ist. Sie auf 0 zu setzen
+    // hieße, sie ohne Grund zurückzudrehen.
+    flasche.style.transition = "none";
+    flasche.classList.remove("dreht");
+  } else if (r.schritt === "dreht") {
+    // Nur beim tatsächlichen Übergang animieren, nicht bei jedem erneuten
+    // Zeichnen – sonst startet die Drehung bei jedem Zustandsupdate neu.
+    if (state.letzteRunde !== `${r.n}:dreht`) {
+      state.winkelStand = r.winkel;
+      flasche.style.transition =
+        `transform ${r.drehMs}ms cubic-bezier(.17,.67,.16,1)`;
+      flasche.classList.add("dreht");
+      // Im nächsten Bild setzen, sonst fasst der Browser Klassenwechsel und
+      // Transform zusammen und es gibt gar keine Animation.
+      requestAnimationFrame(() => {
+        flasche.style.transform = `rotate(${r.winkel}deg)`;
+      });
+    }
+  } else {
+    // Nach der Drehung: Endstand halten, ohne neu zu animieren.
+    flasche.style.transition = "none";
+    flasche.style.transform = `rotate(${r.winkel}deg)`;
+    flasche.classList.remove("dreht");
+  }
+  state.letzteRunde = `${r.n}:${r.schritt}`;
+
+  // --- Karte ---------------------------------------------------------------
+  const karte = $("karte");
+  karte.hidden = r.schritt !== "aufgabe" || !r.karte;
+  if (!karte.hidden) {
+    karte.classList.toggle("pflicht", r.wahl === "pflicht");
+    $("karteKopf").textContent = r.wahl === "wahrheit" ? "Wahrheit" : "Pflicht";
+    $("karteText").textContent = r.karte;
+  }
+
+  // --- Text und Knöpfe -----------------------------------------------------
+  const box = $("aktionen");
+  box.textContent = "";
+  let phase = "";
+  let hint = "";
+
+  if (r.schritt === "bereit") {
+    phase = binDreher ? "Du drehst" : `${r.dreherName} dreht`;
+    if (binDreher) {
+      box.append(knopf("Flasche drehen", "primary big", () => send({ t: "drehen" })));
+      hint = "Die Flasche dreht sich bei allen gleichzeitig.";
+    } else {
+      hint = `Warten auf ${r.dreherName}.`;
+      if (isHost) box.append(knopf("Drehen", "ghost sm", () => send({ t: "drehen" })));
+    }
+    box.append(knopf("Überspringen", "ghost sm", () => send({ t: "ueberspringen" })));
+  } else if (r.schritt === "dreht") {
+    phase = "…";
+    hint = "";
+  } else if (r.schritt === "fertig") {
+    // Modus „Nur drehen": die Flasche hat entschieden, mehr macht das Spiel nicht.
+    phase = binZiel ? "Sie zeigt auf dich" : `Sie zeigt auf ${r.zielName}`;
+    hint = "Was jetzt passiert, macht ihr euch selbst aus.";
+    if (binZiel || isHost) {
+      box.append(knopf("Weiter", "primary big", () => send({ t: "fertig" })));
+    } else {
+      hint += ` Weiter geht’s, sobald ${r.zielName} drückt.`;
+    }
+  } else if (r.schritt === "wahl") {
+    phase = binZiel ? "Sie zeigt auf dich" : `Sie zeigt auf ${r.zielName}`;
+    if (binZiel) {
+      box.append(knopf("Wahrheit", "wahl wahrheit", () => send({ t: "wahl", wahl: "wahrheit" })));
+      box.append(knopf("Pflicht", "wahl pflicht", () => send({ t: "wahl", wahl: "pflicht" })));
+      hint = "Such dir aus, was du lieber machst.";
+    } else {
+      hint = `${r.zielName} wählt zwischen Wahrheit und Pflicht.`;
+    }
+  } else if (r.schritt === "aufgabe") {
+    phase = binZiel ? "Du bist dran" : `${r.zielName} ist dran`;
+    if (binZiel || isHost) {
+      box.append(knopf("Erledigt", "primary", () => send({ t: "fertig" })));
+      box.append(knopf("Andere Karte", "ghost sm", () => send({ t: "andere" })));
+      box.append(knopf("Auslassen", "ghost sm", () => send({ t: "auslassen" })));
+      hint = binZiel
+        ? "Auslassen ist erlaubt und kostet nichts – es wird nur mitgezählt."
+        : "";
+    } else {
+      hint = `Weiter geht’s, sobald ${r.zielName} drückt.`;
+    }
+  }
+
+  $("phasenText").textContent = phase;
+  $("rundenHint").textContent = hint;
+  renderPunktleiste();
+}
+
+function renderPunktleiste() {
+  const r = state.room;
+  if (!r) return;
+  const bar = $("punktleiste");
+  bar.textContent = "";
+  const sorted = r.players.slice().sort((a, b) => b.getroffen - a.getroffen);
+  for (const p of sorted) {
+    const chip = document.createElement("div");
+    chip.className = "chip" + (p.id === state.you ? " me" : "") +
+      (p.connected ? "" : " gone");
+    chip.innerHTML = `
+      <span class="chip-av">${avatarFor(p.id)}</span>
+      <span class="chip-name">${escapeHtml(p.name)}</span>
+      <span class="chip-zahl">${p.getroffen}</span>`;
+    bar.append(chip);
+  }
+}
+
+$("endeBtn").addEventListener("click", () => send({ t: "ende" }));
+
+// ---------------------------------------------------------------------------
+// Endstand
+// ---------------------------------------------------------------------------
+
+function renderFinal(msg) {
+  show("final");
+  const t = msg.tabelle;
+  $("finalSub").textContent = `${msg.runden} Runde${msg.runden === 1 ? "" : "n"} gespielt`;
+
+  const ol = $("podium");
+  ol.textContent = "";
+  const max = Math.max(...t.map((p) => p.getroffen), 0);
+  for (const p of t) {
+    const li = document.createElement("li");
+    li.className = "podest" + (p.id === state.you ? " me" : "") +
+      (max > 0 && p.getroffen === max ? " sieg" : "");
+    const titel = max > 0 && p.getroffen === max
+      ? "hatte die Flasche gepachtet"
+      : p.getroffen === 0
+      ? "nie getroffen worden"
+      : p.pflichten > p.wahrheiten
+      ? `${p.pflichten}× Pflicht genommen`
+      : p.wahrheiten
+      ? `${p.wahrheiten}× Wahrheit genommen`
+      : "";
+    li.innerHTML = `
+      <span class="podest-av">${avatarFor(p.id)}</span>
+      <span class="podest-name">${escapeHtml(p.name)}
+        ${titel ? `<small>${escapeHtml(titel)}</small>` : ""}</span>
+      <span class="podest-zahl">${p.getroffen}<small>× getroffen</small></span>`;
+    ol.append(li);
+  }
+
+  const isHost = state.room?.hostId === state.you;
+  $("againBtn").hidden = !isHost;
+  $("againHint").textContent = isHost
+    ? "Zurück in den Warteraum – dort könnt ihr die Karten umstellen."
+    : "Der Host holt alle zurück in den Warteraum.";
+}
+
+$("againBtn").addEventListener("click", () => send({ t: "again" }));
+
+// ---------------------------------------------------------------------------
+// Start
+// ---------------------------------------------------------------------------
+
+try {
+  const gemerkt = localStorage.getItem(NAME_KEY);
+  if (gemerkt) $("name").value = gemerkt;
+} catch { /* egal */ }
+
+// Geteilter Link mit #CODE: Code eintragen und – wenn der Name schon feststeht –
+// direkt beitreten.
+const hash = location.hash.replace("#", "").toUpperCase().trim();
+if (hash.length >= 3 && hash.length <= 5) {
+  $("codeInput").value = hash;
+  if (!session()?.token && $("name").value.trim()) {
+    state.pendingIntent = { t: "join", code: hash, name: meinName() };
+  }
+}
+
+setModus("harmlos");
+connect();

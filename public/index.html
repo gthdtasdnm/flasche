@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="theme-color" content="#0a0612">
+<title>Flaschendrehen</title>
+<link rel="stylesheet" href="style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='26'>🍾</text></svg>">
+</head>
+<body>
+
+<div id="status"></div>
+<div id="toast"></div>
+
+<!-- ------------------------------------------------------------------ -->
+<section id="screen-home" class="screen active">
+  <div class="home">
+    <h1 class="logo">FLASCHEN<span>DREHEN</span></h1>
+    <p class="tag">Die Flasche entscheidet.</p>
+
+    <label class="field-label" for="name">Dein Name</label>
+    <input id="name" maxlength="12" placeholder="z.&nbsp;B. Mo" autocomplete="nickname">
+
+    <div class="setting">
+      <span class="setting-label">Was danach kommt</span>
+      <div class="segmented">
+        <button class="seg" data-modus="nurdrehen">Nur drehen</button>
+        <button class="seg sel" data-modus="harmlos">Harmlos</button>
+        <button class="seg" data-modus="frech">Frech</button>
+      </div>
+    </div>
+    <p class="fussnote" id="modusNote"></p>
+
+    <div class="setting">
+      <span class="setting-label">Sichtbar</span>
+      <div class="segmented">
+        <button class="seg sel" data-vis="public">Öffentlich</button>
+        <button class="seg" data-vis="private">Privat</button>
+      </div>
+    </div>
+    <button id="createBtn" class="btn primary big">Raum eröffnen</button>
+
+    <div class="or"><span>oder beitreten</span></div>
+
+    <div class="rooms-head">Offene Räume <span id="roomsCount"></span></div>
+    <div id="roomList" class="roomlist"></div>
+
+    <div class="joinrow">
+      <input id="codeInput" maxlength="5" placeholder="CODE" autocapitalize="characters"
+             autocomplete="off" spellcheck="false">
+      <button id="joinBtn" class="btn">Mit Code</button>
+    </div>
+
+    <button id="helpBtn" class="btn ghost small">Wie geht das?</button>
+  </div>
+</section>
+
+<!-- ------------------------------------------------------------------ -->
+<section id="screen-lobby" class="screen">
+  <div class="lobby">
+    <div class="codebox">
+      <span class="codebox-label">Raumcode</span>
+      <strong id="roomCode">····</strong>
+      <span id="roomVis" class="codebox-vis"></span>
+      <button id="copyBtn" class="btn ghost small">Link kopieren</button>
+    </div>
+
+    <div class="lobby-head">
+      <h2>Spieler <span id="lobbyCount">1/10</span></h2>
+    </div>
+    <div id="playerList" class="seats"></div>
+
+    <div id="hostControls" hidden>
+      <div class="setting">
+        <span class="setting-label">Was danach kommt</span>
+        <div class="segmented">
+          <button class="seg" data-lobbymodus="nurdrehen">Nur drehen</button>
+          <button class="seg" data-lobbymodus="harmlos">Harmlos</button>
+          <button class="seg" data-lobbymodus="frech">Frech</button>
+        </div>
+      </div>
+      <div class="setting">
+        <span class="setting-label">Runden</span>
+        <div class="segmented">
+          <button class="seg" data-rounds="8">8</button>
+          <button class="seg" data-rounds="12">12</button>
+          <button class="seg" data-rounds="20">20</button>
+          <button class="seg" data-rounds="0">∞</button>
+        </div>
+      </div>
+      <div class="setting">
+        <span class="setting-label">Sichtbar</span>
+        <div class="segmented">
+          <button class="seg" data-lobbyvis="public">Öffentlich</button>
+          <button class="seg" data-lobbyvis="private">Privat</button>
+        </div>
+      </div>
+      <button id="startBtn" class="btn primary big">Runde starten</button>
+      <p id="startHint" class="hintline"></p>
+    </div>
+
+    <div id="guestControls" hidden>
+      <button id="readyBtn" class="btn big">Bereit!</button>
+      <p class="hintline">Der Host startet, sobald alle bereit sind.</p>
+    </div>
+
+    <button id="leaveBtn" class="btn ghost small">Raum verlassen</button>
+  </div>
+</section>
+
+<!-- ------------------------------------------------------------------ -->
+<section id="screen-game" class="screen">
+  <div class="game">
+    <header class="topbar">
+      <div class="tb-runde">Runde <strong id="rundeNo">1</strong><small id="rundeTotal"></small></div>
+      <div id="modusTag" class="tb-modus"></div>
+      <button id="endeBtn" class="btn ghost sm" hidden>Beenden</button>
+    </header>
+
+    <main class="buehne">
+      <!-- Der Kreis. Die Namen liegen als Punkte darauf, die Flasche in der
+           Mitte dreht sich auf den vom Server bestimmten Winkel. -->
+      <div class="kreis" id="kreis">
+        <div class="flasche" id="flasche">
+          <div class="flasche-bild">🍾</div>
+        </div>
+        <div class="kreis-mitte" id="kreisMitte"></div>
+      </div>
+
+      <p id="phasenText" class="phasen-text"></p>
+
+      <div class="karte" id="karte" hidden>
+        <span class="karte-kopf" id="karteKopf">Wahrheit</span>
+        <p class="karte-text" id="karteText"></p>
+      </div>
+    </main>
+
+    <footer class="fussbereich">
+      <div id="aktionen" class="aktionen"></div>
+      <p id="rundenHint" class="hintline"></p>
+      <div id="punktleiste" class="punktleiste"></div>
+    </footer>
+  </div>
+</section>
+
+<!-- ------------------------------------------------------------------ -->
+<section id="screen-final" class="screen">
+  <div class="final">
+    <h2 class="final-title">Endstand</h2>
+    <p id="finalSub" class="hintline"></p>
+    <ol id="podium" class="podium"></ol>
+    <button id="againBtn" class="btn big">Nochmal!</button>
+    <p id="againHint" class="hintline">Der Host holt alle zurück in den Warteraum.</p>
+  </div>
+</section>
+
+<div id="help" hidden>
+  <div class="help-inner">
+    <h2>So läuft das</h2>
+    <ul>
+      <li><b>Ihr sitzt zusammen</b> – am Tisch, auf dem Sofa, im Videocall.
+          Jeder hat sein eigenes Handy offen.</li>
+      <li><b>Reihum dreht einer die Flasche.</b> Sie dreht sich auf allen
+          Bildschirmen gleichzeitig und bleibt bei allen auf derselben Person
+          stehen.</li>
+      <li><b>Wen sie trifft, ist dran.</b> Im Modus <i>Nur drehen</i> ist die
+          Runde damit vorbei – was dann passiert, macht ihr euch selbst aus.</li>
+      <li><b>Sonst wählt die Person</b> zwischen <i>Wahrheit</i> und
+          <i>Pflicht</i> und bekommt eine Karte. Alle sehen sie.</li>
+      <li><b>Passt die Karte nicht,</b> gibt es mit einem Druck eine andere.</li>
+      <li><b>Auslassen ist immer erlaubt</b> und kostet nichts. Es wird nur
+          mitgezählt.</li>
+      <li><b>Am Ende</b> steht, wen die Flasche am häufigsten getroffen hat und
+          wer lieber Wahrheit als Pflicht genommen hat.</li>
+    </ul>
+    <p class="help-klein">Die Karten kommen ohne Alkohol, ohne Sex und ohne
+      Körperkontakt aus – <i>frech</i> heißt hier peinlich, nicht anzüglich.
+      Jede Pflicht lässt sich im Sitzen am Tisch erfüllen.</p>
+    <button id="helpClose" class="btn">Alles klar</button>
+  </div>
+</div>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>
