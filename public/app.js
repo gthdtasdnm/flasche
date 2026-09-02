@@ -4,6 +4,13 @@
 // nicht nach – sonst könnten zwei Geräte auf verschiedene Leute zeigen, und
 // genau das wäre das Ende des Spiels.
 
+import { starteSprache, t, uebersetze } from "./sprache.js";
+import { WOERTER } from "./texte.js";
+
+// Vor allem, was zeichnet: der Warteraum soll gleich in der richtigen
+// Sprache dastehen. Deutsch steht im HTML und in den Aufrufen hier.
+starteSprache(WOERTER);
+
 const $ = (id) => document.getElementById(id);
 
 // Sitzplatz-Tierchen. Gleiche Liste und gleiche Ableitung wie in den anderen
@@ -16,6 +23,8 @@ const MODUS_TEXT = {
   nurdrehen: "Nur drehen",
   harmlos: "Harmlos",
   frech: "Frech",
+  // Uebersetzt wird beim Anzeigen (fl.modus.*) - hier steht der deutsche
+  // Wortlaut, wie ueberall.
 };
 
 const state = {
@@ -139,7 +148,7 @@ function connect() {
   };
 
   sock.onclose = () => {
-    setStatus("Verbindung weg – neuer Versuch …");
+    setStatus(t("c.weg", {}, "Verbindung weg – neuer Versuch …"));
     setTimeout(connect, retryIn);
     retryIn = Math.min(retryIn * 1.8, 8000);
   };
@@ -233,8 +242,9 @@ function renderRooms(list) {
   const box = $("roomList");
   $("roomsCount").textContent = list.length ? `(${list.length})` : "";
   if (!list.length) {
-    box.innerHTML = `<p class="rooms-empty">Gerade ist kein Raum offen.
-      Eröffne einen – er erscheint dann bei den anderen in der Liste.</p>`;
+    box.innerHTML = `<p class="rooms-empty">${
+      t("c.keinRaum", {}, "Gerade ist kein Raum offen. Eröffne einen – er erscheint dann bei den anderen in der Liste.")
+    }</p>`;
     return;
   }
   box.innerHTML = list.map((r) => `
@@ -288,10 +298,10 @@ function setModus(m) {
     b.classList.toggle("sel", b.dataset.modus === m);
   }
   $("modusNote").textContent = m === "nurdrehen"
-    ? "Nur die Flasche. Was danach kommt, macht ihr euch selbst aus."
+    ? t("fl.noteNurdrehen", {}, "Nur die Flasche. Was danach kommt, macht ihr euch selbst aus.")
     : m === "frech"
-    ? "Peinlich, aber jugendfrei: kein Alkohol, kein Körperkontakt."
-    : "Karten, die man am Familientisch vorlesen kann.";
+    ? t("fl.noteFrech", {}, "Peinlich, aber jugendfrei: kein Alkohol, kein Körperkontakt.")
+    : t("fl.noteHarmlos", {}, "Karten, die man am Familientisch vorlesen kann.");
 }
 
 for (const b of document.querySelectorAll("[data-modus]")) {
@@ -325,7 +335,7 @@ $("createBtn").addEventListener("click", () => {
 
 $("joinBtn").addEventListener("click", () => {
   const code = $("codeInput").value.toUpperCase().trim();
-  if (code.length < 3) return toast("Bitte den vierstelligen Code eingeben");
+  if (code.length < 3) return toast(t("c.codeBitte", {}, "Bitte den vierstelligen Code eingeben"));
   joinCode(code);
 });
 
@@ -356,7 +366,9 @@ function renderRoom() {
   const da = r.players.filter((p) => p.connected).length;
   $("lobbyCount").textContent = `${da}/${r.maxPlayers}`;
   $("roomVis").textContent =
-    (r.isPublic ? "Öffentlich – steht in der Liste" : "Privat – nur mit Code") +
+    (r.isPublic
+      ? t("c.oeffentlich", {}, "Öffentlich – steht in der Liste")
+      : t("c.privat", {}, "Privat – nur mit Code")) +
     " · " + MODUS_TEXT[r.settings.modus];
 
   const list = $("playerList");
@@ -369,15 +381,22 @@ function renderRoom() {
       (p?.ready ? " ready" : "") + (p && !p.connected ? " off" : "");
     if (!p) {
       card.innerHTML =
-        `<div class="av">🪑</div><div class="nm">frei</div><div class="st">wartet</div>`;
+        `<div class="av">🪑</div><div class="nm">${t("c.frei", {}, "frei")}</div>` +
+        `<div class="st">${t("c.wartet", {}, "wartet")}</div>`;
     } else {
       card.innerHTML = `
         <div class="av">${avatarFor(p.id)}</div>
-        <div class="nm">${escapeHtml(p.name)}${p.id === state.you ? " (du)" : ""}</div>
+        <div class="nm">${escapeHtml(p.name)}${p.id === state.you ? t("c.du", {}, " (du)") : ""}</div>
         <div class="st">${
-        !p.connected ? "weg" : p.host ? "startet" : p.ready ? "✓ bereit" : "wartet"
+        !p.connected
+          ? t("fl.weg", {}, "weg")
+          : p.host
+          ? t("fl.startet", {}, "startet")
+          : p.ready
+          ? t("fl.bereit", {}, "✓ bereit")
+          : t("c.wartet", {}, "wartet")
       }</div>
-        ${p.host ? '<div class="host">HOST</div>' : ""}`;
+        ${p.host ? `<div class="host">${t("c.host", {}, "HOST")}</div>` : ""}`;
     }
     list.append(card);
   }
@@ -403,12 +422,14 @@ function renderRoom() {
   const allReady = others.every((p) => p.ready);
   $("startBtn").disabled = here.length < r.minPlayers || !allReady;
   $("startHint").textContent = here.length < r.minPlayers
-    ? "Zu dritt geht es los – zu zweit zeigt die Flasche jedes Mal auf denselben."
+    ? t("fl.zuDritt", {}, "Zu dritt geht es los – zu zweit zeigt die Flasche jedes Mal auf denselben.")
     : allReady
-    ? "Alle bereit!"
-    : "Warten auf die anderen …";
+    ? t("c.alleBereit", {}, "Alle bereit!")
+    : t("fl.warten", {}, "Warten auf die anderen …");
 
-  $("readyBtn").textContent = me?.ready ? "Doch nicht bereit" : "Bereit!";
+  $("readyBtn").textContent = me?.ready
+    ? t("fl.dochNicht", {}, "Doch nicht bereit")
+    : t("schale.bereitKnopf", {}, "Bereit!");
   $("readyBtn").classList.toggle("on", !!me?.ready);
 }
 
@@ -441,7 +462,7 @@ $("copyBtn").addEventListener("click", async () => {
   const link = location.origin + location.pathname + "#" + (state.code ?? "");
   try {
     await navigator.clipboard.writeText(link);
-    toast("Link kopiert");
+    toast(t("schale.kopiert", {}, "Link kopiert"));
   } catch {
     // Ohne Zwischenablage (http, altes Handy) bleibt nur Vorlesen.
     toast(link);
@@ -497,7 +518,9 @@ function renderRunde() {
 
   $("rundeNo").textContent = String(r.n);
   $("rundeTotal").textContent = r.total ? ` / ${r.total}` : "";
-  $("modusTag").textContent = MODUS_TEXT[r.modus] ?? "";
+  $("modusTag").textContent = r.modus
+    ? t("fl.modus." + r.modus, {}, MODUS_TEXT[r.modus] ?? "")
+    : "";
   $("endeBtn").hidden = !isHost;
 
   zeichneKreis(r);
@@ -536,7 +559,9 @@ function renderRunde() {
   karte.hidden = r.schritt !== "aufgabe" || !r.karte;
   if (!karte.hidden) {
     karte.classList.toggle("pflicht", r.wahl === "pflicht");
-    $("karteKopf").textContent = r.wahl === "wahrheit" ? "Wahrheit" : "Pflicht";
+    $("karteKopf").textContent = r.wahl === "wahrheit"
+      ? t("fl.wahrheit", {}, "Wahrheit")
+      : t("fl.pflicht", {}, "Pflicht");
     $("karteText").textContent = r.karte;
   }
 
@@ -547,47 +572,62 @@ function renderRunde() {
   let hint = "";
 
   if (r.schritt === "bereit") {
-    phase = binDreher ? "Du drehst" : `${r.dreherName} dreht`;
+    phase = binDreher
+      ? t("fl.duDrehst", {}, "Du drehst")
+      : t("fl.drehtName", { name: r.dreherName }, `${r.dreherName} dreht`);
     if (binDreher) {
-      box.append(knopf("Flasche drehen", "primary big", () => send({ t: "drehen" })));
-      hint = "Die Flasche dreht sich bei allen gleichzeitig.";
+      box.append(knopf(t("fl.flascheDrehen", {}, "Flasche drehen"), "primary big",
+        () => send({ t: "drehen" })));
+      hint = t("fl.drehtGleichzeitig", {}, "Die Flasche dreht sich bei allen gleichzeitig.");
     } else {
-      hint = `Warten auf ${r.dreherName}.`;
-      if (isHost) box.append(knopf("Drehen", "ghost sm", () => send({ t: "drehen" })));
+      hint = t("fl.wartenAuf", { name: r.dreherName }, `Warten auf ${r.dreherName}.`);
+      if (isHost) box.append(knopf(t("fl.drehen", {}, "Drehen"), "ghost sm", () => send({ t: "drehen" })));
     }
-    box.append(knopf("Überspringen", "ghost sm", () => send({ t: "ueberspringen" })));
+    box.append(knopf(t("fl.ueberspringen", {}, "Überspringen"), "ghost sm",
+      () => send({ t: "ueberspringen" })));
   } else if (r.schritt === "dreht") {
     phase = "…";
     hint = "";
   } else if (r.schritt === "fertig") {
     // Modus „Nur drehen": die Flasche hat entschieden, mehr macht das Spiel nicht.
-    phase = binZiel ? "Sie zeigt auf dich" : `Sie zeigt auf ${r.zielName}`;
-    hint = "Was jetzt passiert, macht ihr euch selbst aus.";
+    phase = binZiel
+      ? t("fl.zeigtAufDich", {}, "Sie zeigt auf dich")
+      : t("fl.zeigtAuf", { name: r.zielName }, `Sie zeigt auf ${r.zielName}`);
+    hint = t("fl.machtIhrAus", {}, "Was jetzt passiert, macht ihr euch selbst aus.");
     if (binZiel || isHost) {
-      box.append(knopf("Weiter", "primary big", () => send({ t: "fertig" })));
+      box.append(knopf(t("fl.weiter", {}, "Weiter"), "primary big", () => send({ t: "fertig" })));
     } else {
-      hint += ` Weiter geht’s, sobald ${r.zielName} drückt.`;
+      hint += " " + t("fl.weiterSobald", { name: r.zielName },
+        `Weiter geht’s, sobald ${r.zielName} drückt.`);
     }
   } else if (r.schritt === "wahl") {
-    phase = binZiel ? "Sie zeigt auf dich" : `Sie zeigt auf ${r.zielName}`;
+    phase = binZiel
+      ? t("fl.zeigtAufDich", {}, "Sie zeigt auf dich")
+      : t("fl.zeigtAuf", { name: r.zielName }, `Sie zeigt auf ${r.zielName}`);
     if (binZiel) {
-      box.append(knopf("Wahrheit", "wahl wahrheit", () => send({ t: "wahl", wahl: "wahrheit" })));
-      box.append(knopf("Pflicht", "wahl pflicht", () => send({ t: "wahl", wahl: "pflicht" })));
-      hint = "Such dir aus, was du lieber machst.";
+      box.append(knopf(t("fl.wahrheit", {}, "Wahrheit"), "wahl wahrheit",
+        () => send({ t: "wahl", wahl: "wahrheit" })));
+      box.append(knopf(t("fl.pflicht", {}, "Pflicht"), "wahl pflicht",
+        () => send({ t: "wahl", wahl: "pflicht" })));
+      hint = t("fl.suchDirAus", {}, "Such dir aus, was du lieber machst.");
     } else {
-      hint = `${r.zielName} wählt zwischen Wahrheit und Pflicht.`;
+      hint = t("fl.waehltZwischen", { name: r.zielName },
+        `${r.zielName} wählt zwischen Wahrheit und Pflicht.`);
     }
   } else if (r.schritt === "aufgabe") {
-    phase = binZiel ? "Du bist dran" : `${r.zielName} ist dran`;
+    phase = binZiel
+      ? t("fl.duBistDran", {}, "Du bist dran")
+      : t("fl.istDran", { name: r.zielName }, `${r.zielName} ist dran`);
     if (binZiel || isHost) {
-      box.append(knopf("Erledigt", "primary", () => send({ t: "fertig" })));
-      box.append(knopf("Andere Karte", "ghost sm", () => send({ t: "andere" })));
-      box.append(knopf("Auslassen", "ghost sm", () => send({ t: "auslassen" })));
+      box.append(knopf(t("fl.erledigt", {}, "Erledigt"), "primary", () => send({ t: "fertig" })));
+      box.append(knopf(t("fl.andereKarte", {}, "Andere Karte"), "ghost sm", () => send({ t: "andere" })));
+      box.append(knopf(t("fl.auslassen", {}, "Auslassen"), "ghost sm", () => send({ t: "auslassen" })));
       hint = binZiel
-        ? "Auslassen ist erlaubt und kostet nichts – es wird nur mitgezählt."
+        ? t("fl.auslassenOk", {}, "Auslassen ist erlaubt und kostet nichts – es wird nur mitgezählt.")
         : "";
     } else {
-      hint = `Weiter geht’s, sobald ${r.zielName} drückt.`;
+      hint = t("fl.weiterSobald", { name: r.zielName },
+        `Weiter geht’s, sobald ${r.zielName} drückt.`);
     }
   }
 
